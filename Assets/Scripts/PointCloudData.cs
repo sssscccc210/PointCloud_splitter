@@ -11,7 +11,27 @@ public class PointCloudData : MonoBehaviour
     float maxX, minX, maxY, minY, maxZ, minZ;
     public int sizeOfBlockedAllDataX, sizeOfBlockedAllDataY, sizeOfBlockedAllDataZ;
 
-
+    private readonly static Dictionary<string, byte> SizeOfTypes = new()
+    {
+        /*
+        char       character                 1
+        uchar      unsigned character        1
+        short      short integer             2
+        ushort     unsigned short integer    2
+        int        integer                   4
+        uint       unsigned integer          4
+        float      single-precision float    4
+        double     double-precision float    8 
+        */
+        {"char", 1 },
+        {"uchar", 1 },
+        {"short", 2 },
+        {"ushort", 2 },
+        {"int", 4 },
+        {"uint", 4 },
+        {"float", 4 },
+        {"double", 8 }
+    };
 
     public struct Point
     {
@@ -48,8 +68,6 @@ public class PointCloudData : MonoBehaviour
     /// <param name="db">DATABASEインスタンス（必要なパラメータが格納されている）</param>
     public void LoadPly(DATABASE db)
     {
-        int vertexCount = -1;
-
         if (!File.Exists(db.originalPath))
         {
             throw new FileNotFoundException("指定されたファイルが見つかりません。", db.originalPath);
@@ -58,60 +76,145 @@ public class PointCloudData : MonoBehaviour
         // FileStream を開く。これがファイルの生データへのアクセスを提供する。
         FileStream fs = new FileStream(db.originalPath, FileMode.Open, FileAccess.Read);
 
-        using (BinaryReader reader = new BinaryReader(fs))// 今度はバイナリを読む
+
+        // ヘッダー部を読み取る
+        bool isAscii = false;
+        int vertexCount = -1;
+        int countBeforeX = 0;
+        int bytesBeforeX = 0;
+        int bytesAfterBlue = 0;
+
+        // 第5引数の `leaveOpen` を true に設定すると，StreamReaderを閉じても，underlying (元の) FileStreamは開いたままにできる。
+        using (StreamReader reader = new StreamReader(fs, Encoding.ASCII, true, 1024, true))
         {
             string tmp;
-            char c;
-            // ヘッダー部を読み飛ばす（途中，vertexCountを見る）
-            do
+            string[] tmpCell;// tmpをさらに' 'で区切るときの格納先
+            bool isBeforeX = true;
+            while ( !( tmp = reader.ReadLine() ).Contains("end_header") )
             {
-                tmp = "";
-                while ((c = reader.ReadChar()) != '\n') tmp += c;
-                Debug.Log(tmp);
-
-                if(tmp.Contains("element vertex"))
+                if (tmp.StartsWith("format"))
+                {
+                    if (tmp.Contains("ascii")) isAscii = true;
+                    else if (tmp.Contains("binary_big_endian"))
+                    {
+                        Debug.LogError("big endianなファイルには対応していません。");
+                        return;
+                    }
+                    // binary_little_endianならisAscii = falseですでに初期化の値
+                }
+                else if (tmp.StartsWith("element vertex"))
                 {
                     vertexCount = int.Parse(tmp.Split(' ')[2]);
                 }
-            } while (tmp != "end_header");
+                else if (tmp.StartsWith("property"))
+                {
+                    tmpCell = tmp.Split(' ');
+                    if (tmpCell[2] == "x")
+                    {
+                        // x, y, z, r, g, bは連続する（という仮定）ので，スキップ
+                        for(int i = 0; i < 5; ++i) reader.ReadLine();
+                        isBeforeX = false;
+                    }
+                    else
+                    {
+                        // xに対するpropertyで無い場合
+                        if (isBeforeX){
+                            bytesBeforeX += SizeOfTypes[tmpCell[1]];
+                            countBeforeX++;
+                        }
+                        else bytesAfterBlue += SizeOfTypes[tmpCell[1]];
+                    }
+                }
+            }
 
             if (vertexCount <= 0)
             {
                 Debug.Log("plyから頂点の数が読み取れませんでした");
                 return;
             }
-            
+            else Debug.Log($"{vertexCount}個の点を読み込みます");
 
-            Debug.Log($"{vertexCount}個の点を読み込みます");
-            // 本体を読んでいく
-            for (int i = 0; i < vertexCount; ++i)
+
+            if (isAscii)
             {
+                // binaryの場合のデータ読み込みはこの後，別で行う
 
-                Point p = new();
-                p.x = reader.ReadSingle();
-                p.z = reader.ReadSingle();// yとzは反転している
-                p.y = reader.ReadSingle();
-                p.r = reader.ReadByte();
-                p.g = reader.ReadByte();
-                p.b = reader.ReadByte();
-                reader.ReadByte();// 以下，読み飛ばし部分。今は自分で手打ち
-                reader.ReadSingle();
-                reader.ReadSingle();
-                reader.ReadSingle();
-                reader.ReadSingle();
-                reader.ReadSingle();
+                // 本体を読んでいく
+                for (int i = 0; i < vertexCount; ++i)
+                {
+                    // 点群 ⇄ minecraft: x ⇄ z, y ⇄ x, z ⇄ y
+                    Point p = new();
+                    string[] cell = reader.ReadLine().Split(' ');
+                    p.z = float.Parse(cell[countBeforeX]);
+                    p.x = float.Parse(cell[countBeforeX + 1]);
+                    p.y = float.Parse(cell[countBeforeX + 2]);
+                    p.r = byte.Parse(cell[countBeforeX + 3]);
+                    p.g = byte.Parse(cell[countBeforeX + 4]);
+                    p.b = byte.Parse(cell[countBeforeX + 5]);
 
-                // rgb値からL*a*b*空間の値も求めておく
-                (float l, float a, float b) t = ColorUtility.Srgb2Lab(p.r, p.g, p.b);
-                p._l = t.l;
-                p._a = t.a;
-                p._b = t.b;
 
-                //if(i % 500 == 0) PrintPointInfo(p);
-                CheckMaxAndMin(p);// 最大値・最小値を更新可能なら，更新する
-                allData.Add(p);
+                    // rgb値からL*a*b*空間の値も求めておく
+                    (float l, float a, float b) t = ColorUtility.Srgb2Lab(p.r, p.g, p.b);
+                    p._l = t.l;
+                    p._a = t.a;
+                    p._b = t.b;
+
+
+                    //if(i % 500 == 0) PrintPointInfo(p);
+                    CheckMaxAndMin(p);// 最大値・最小値を更新可能なら，更新する
+                    allData.Add(p);
+                }
+            }
+            
+        }
+
+        
+        // binaryなら，別途readerを用意してデータの中身を見ていく
+        if (!isAscii)
+        {
+            fs.Position = 0;// 読み込み位置を0にする
+            using (BinaryReader reader = new BinaryReader(fs))
+            {
+                string tmp;
+                char c;
+                // ヘッダー部を読み飛ばす
+                do
+                {
+                    tmp = "";
+                    while ((c = reader.ReadChar()) != '\n') tmp += c;
+
+                } while (tmp != "end_header");
+
+
+                // 本体を読んでいく
+                for (int i = 0; i < vertexCount; ++i)
+                {
+                    // 点群 ⇄ minecraft: x ⇄ z, y ⇄ x, z ⇄ y
+                    Point p = new();
+                    reader.ReadBytes(bytesBeforeX);
+                    p.z = reader.ReadSingle();
+                    p.x = reader.ReadSingle();
+                    p.y = reader.ReadSingle();
+                    p.r = reader.ReadByte();
+                    p.g = reader.ReadByte();
+                    p.b = reader.ReadByte();
+                    reader.ReadBytes(bytesAfterBlue);
+
+
+                    // rgb値からL*a*b*空間の値も求めておく
+                    (float l, float a, float b) t = ColorUtility.Srgb2Lab(p.r, p.g, p.b);
+                    p._l = t.l;
+                    p._a = t.a;
+                    p._b = t.b;
+
+
+                    //if(i % 500 == 0) PrintPointInfo(p);
+                    CheckMaxAndMin(p);// 最大値・最小値を更新可能なら，更新する
+                    allData.Add(p);
+                }
             }
         }
+        
 
         // 全ての点がallDataに格納された＆サイズが分かるので，各区間に再配置
 
