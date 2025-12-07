@@ -40,6 +40,13 @@ public class PointCloudData : MonoBehaviour
         public float _l, _a, _b; // 4 bytes
     }
 
+
+    public PointCloudData()
+    {
+        maxX = maxY = maxZ = -Mathf.Infinity;
+        minX = minY = minZ = Mathf.Infinity;
+    }
+
     /// <summary>
     /// static: 与えられたPoint構造体について，情報を表示する。
     /// </summary>
@@ -51,7 +58,7 @@ public class PointCloudData : MonoBehaviour
     /// <summary>
     /// 与えられたPoint構造体について，x, y, zが現在の最大・最小を更新するなら更新する。
     /// </summary>
-    void CheckMaxAndMin(Point p)
+    private void CheckMaxAndMin(Point p)
     {
         if (p.x > maxX) maxX = p.x;
         else if (p.x < minX) minX = p.x;
