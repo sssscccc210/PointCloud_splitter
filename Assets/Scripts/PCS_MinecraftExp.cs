@@ -195,7 +195,7 @@ public class PCS_MinecraftExp : MonoBehaviour
                         aveB /= pointCountInBlock;
 
                         // 近い色のブロックをワールドに配置
-                        SetBlock(client, new Vector3(x, y - 62, z), SelectBlockWithLab(aveL, aveA, aveB).technicalName);
+                        SetBlock(client, new Vector3(x, y, z) + db.generatePosition, SelectBlockWithLab(aveL, aveA, aveB).technicalName);
                         //SetBlock(client, new Vector3(x, y - 62, z));// ブロックを削除（空気にする）ならこちら
                     }
                 }
